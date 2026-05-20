@@ -609,7 +609,7 @@ const PostTask = () => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto py-4">
+    <div className="max-w-5xl mx-auto py-4 px-2">
       <div className="grid lg:grid-cols-5 gap-5">
         <div className="lg:col-span-2">
           <p className="text-sm font-semibold text-primary">Create booking</p>
@@ -637,7 +637,7 @@ const PostTask = () => {
             </div>
           )}
 
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid md:grid-cols-2 gap-4 ">
             <label className="block">
               <span className="text-sm font-medium">Service</span>
               <select
