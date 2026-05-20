@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', sans-serif;
+  --color-primary: #2563eb;
+  --color-secondary: #0f766e;
+  --color-accent: #f97316;
+  --color-dark: #0f172a;
+  --color-dark-light: #172033;
+  --color-light: #f6f8fb;
+}
+
+@layer base {
+  * {
+    letter-spacing: 0;
+  }
+
+  body {
+    @apply bg-light dark:bg-dark text-slate-800 dark:text-slate-200 antialiased font-sans transition-colors duration-300;
+    background-image:
+      radial-gradient(circle at 12% 10%, rgb(37 99 235 / 0.08), transparent 28rem),
+      radial-gradient(circle at 86% 4%, rgb(15 118 110 / 0.08), transparent 26rem);
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/85 dark:bg-dark-light/85 backdrop-blur-md border border-slate-200/70 dark:border-white/10 shadow-sm;
+  }
+  
+  .glass-card {
+    @apply bg-white/90 dark:bg-dark-light/90 backdrop-blur-lg border border-slate-200/80 dark:border-white/10 shadow-sm rounded-lg;
+  }
+  
+  .text-gradient {
+    @apply bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 bg-primary hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg font-medium transition-colors;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 px-4 py-3 outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all;
+  }
+
+  .section-title {
+    @apply text-2xl md:text-3xl font-bold text-slate-950 dark:text-white;
+  }
+}
