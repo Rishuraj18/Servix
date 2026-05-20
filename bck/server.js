@@ -19,7 +19,7 @@ const allowedOrigins = [
   'http://localhost:5000',
   'https://servix1.netlify.app',
   process.env.FRONTEND_URL
-].filter(Boolean); // Remove undefined values
+].filter(Boolean);
 
 // Remove duplicate origins
 const uniqueOrigins = [...new Set(allowedOrigins)];
@@ -27,15 +27,12 @@ const uniqueOrigins = [...new Set(allowedOrigins)];
 // CORS options for Express
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, postman)
     if (!origin) return callback(null, true);
     
-    // Check if origin is allowed
     if (uniqueOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
       console.warn(`CORS blocked origin: ${origin}`);
-      // In development, allow all origins
       if (process.env.NODE_ENV !== 'production') {
         callback(null, true);
       } else {
@@ -58,17 +55,17 @@ const io = new Server(server, {
   }
 });
 
-// ✅ FIXED: Apply CORS middleware before routes
+// Apply CORS middleware
 app.use(cors(corsOptions));
 
-// ✅ FIXED: Handle preflight requests
-app.options('*', cors(corsOptions));
+// ✅ FIXED: Remove the problematic line - this causes the error
+// app.options('*', cors(corsOptions));  // ← COMMENT THIS LINE OR REMOVE IT
 
 // Other middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ FIXED: Helmet configuration (don't block CORS)
+// Helmet configuration
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -97,7 +94,7 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/content', contentRoutes);
 
-// ✅ ADDED: Health check endpoint
+// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     success: true, 
@@ -117,7 +114,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// ✅ FIXED: Socket.io connection handling
+// ✅ FIXED: 404 handler - use specific path instead of '*'
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Cannot ${req.method} ${req.originalUrl} - Route not found`
+  });
+});
+
+// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   console.log('Total connected clients:', io.engine.clientsCount);
@@ -137,7 +142,6 @@ io.on('connection', (socket) => {
       
       console.log(`User ${socket.id} (${userRole}) joined chat room: ${chatRoom}`);
       
-      // Send previous messages
       try {
         const [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
         if (chats.length) {
@@ -173,14 +177,12 @@ io.on('connection', (socket) => {
       
       const chatRoom = `booking_${bookingId}`;
       
-      // Check booking exists
       const [bookings] = await db.query('SELECT id FROM bookings WHERE id = ?', [bookingId]);
       if (!bookings.length) {
         socket.emit('message_error', { message: 'Booking not found' });
         return;
       }
 
-      // Get or create chat
       let [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
       let chatId;
 
@@ -194,7 +196,6 @@ io.on('connection', (socket) => {
         chatId = chats[0].id;
       }
 
-      // Save message to database
       const senderType = userRole === 'admin' ? 'admin' : 'user';
       const [insertMsg] = await db.query(
         `INSERT INTO messages (chat_id, sender_type, sender_id, message, created_at) 
@@ -210,7 +211,6 @@ io.on('connection', (socket) => {
         [insertMsg.insertId]
       );
 
-      // Broadcast to all users in this chat room
       io.to(chatRoom).emit('receive_message', {
         id: newMessage[0].id,
         message: newMessage[0].message,
@@ -267,19 +267,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// ✅ FIXED: 404 handler for undefined routes
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Cannot ${req.method} ${req.originalUrl} - Route not found`
-  });
-});
-
-// ✅ FIXED: Global error handler
+// Global error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);
   
-  // Handle specific error types
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({
       success: false,
@@ -294,16 +285,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ FIXED: Handle uncaught exceptions
+// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
-  // Graceful shutdown
   server.close(() => {
     process.exit(1);
   });
 });
 
-// ✅ FIXED: Handle unhandled promise rejections
+// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
@@ -317,5 +307,4 @@ server.listen(PORT, () => {
   console.log(`📡 WebSocket server is ready`);
 });
 
-// Export for testing purposes
 module.exports = { app, server, io };
