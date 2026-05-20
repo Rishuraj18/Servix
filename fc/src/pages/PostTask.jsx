@@ -662,10 +662,10 @@ const PostTask = () => {
             <label className="block">
               <span className="text-sm font-medium">Estimated budget (₹)</span>
               <div className="relative mt-1">
-                <IndianRupee
+                {/* <IndianRupee
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                   size={18}
-                />
+                /> */}
                 <input
                   type="number"
                   name="budget"
