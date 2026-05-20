@@ -1,7 +1,20 @@
 import axios from 'axios';
 
+// Detect if running on localhost or production
+const getBaseURL = () => {
+  // Check if running on localhost
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:5000/api'; // Local backend
+  }
+  // Production (Netlify / Render)
+  return 'https://servix-bjid.onrender.com/api'; // Render backend
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: getBaseURL(),
+  headers: {
+    'Content-Type': 'application/json',
+  },
 });
 
 api.interceptors.request.use((config) => {
