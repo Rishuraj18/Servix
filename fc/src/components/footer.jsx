@@ -78,20 +78,20 @@ const Footer = () => {
               </li>
               <li>
                 <a 
-                  href="tel:+919876543210"
+                  href="tel:+917261024952"
                   className="flex items-center gap-3 text-gray-400 hover:text-amber-400 transition-colors duration-300 group"
                 >
                   <div className="bg-white/10 p-2 rounded-lg group-hover:bg-amber-400 group-hover:text-slate-900 transition-all duration-300">
                     <Phone size={16} />
                   </div>
-                  <span className="text-sm">+91 98765 43210</span>
+                  <span className="text-sm">+91 7261024952</span>
                 </a>
               </li>
-              <li className="flex items-start gap-3 text-gray-400">
+              <li className="flex items-center gap-3 text-gray-400">
                 <div className="bg-white/10 p-2 rounded-lg mt-0.5">
                   <MapPin size={16} />
                 </div>
-                <span className="text-sm">123 Service Road, Bangalore - 560001, India</span>
+                <span className="text-sm">Ramnagariya, Jagatpura, Jaipur, Rajasthan, India – 302017</span>
               </li>
             </ul>
           </div>
