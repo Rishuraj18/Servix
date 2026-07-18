@@ -122,6 +122,10 @@ app.use((req, res) => {
   });
 });
 
+const Booking = require('./models/Booking');
+const Chat = require('./models/Chat');
+const Message = require('./models/Message');
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -143,17 +147,18 @@ io.on('connection', (socket) => {
       console.log(`User ${socket.id} (${userRole}) joined chat room: ${chatRoom}`);
       
       try {
-        const [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
-        if (chats.length) {
-          const [messages] = await db.query(
-            `SELECT m.*, u.name as sender_name 
-             FROM messages m
-             LEFT JOIN users u ON u.id = m.sender_id
-             WHERE m.chat_id = ?
-             ORDER BY m.created_at ASC`,
-            [chats[0].id]
-          );
-          socket.emit('previous_messages', messages);
+        const chat = await Chat.findOne({ booking_id: bookingId });
+        if (chat) {
+          const messages = await Message.find({ chat_id: chat._id })
+            .populate('sender_id', 'name')
+            .sort({ created_at: 1 })
+            .lean();
+            
+          const mappedMessages = messages.map(m => ({
+            ...m,
+            sender_name: m.sender_type === 'admin' ? 'Support Admin' : (m.sender_id ? m.sender_id.name : 'Customer')
+          }));
+          socket.emit('previous_messages', mappedMessages);
         }
       } catch (err) {
         console.error('Error fetching previous messages:', err);
@@ -177,47 +182,38 @@ io.on('connection', (socket) => {
       
       const chatRoom = `booking_${bookingId}`;
       
-      const [bookings] = await db.query('SELECT id FROM bookings WHERE id = ?', [bookingId]);
-      if (!bookings.length) {
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
         socket.emit('message_error', { message: 'Booking not found' });
         return;
       }
 
-      let [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
-      let chatId;
-
-      if (!chats.length) {
-        const [insertChat] = await db.query(
-          'INSERT INTO chats (user_id, booking_id, created_at) VALUES (?, ?, NOW())',
-          [userId, bookingId]
-        );
-        chatId = insertChat.insertId;
-      } else {
-        chatId = chats[0].id;
+      let chat = await Chat.findOne({ booking_id: bookingId });
+      if (!chat) {
+        chat = new Chat({ user_id: userId, booking_id: bookingId });
+        await chat.save();
       }
 
       const senderType = userRole === 'admin' ? 'admin' : 'user';
-      const [insertMsg] = await db.query(
-        `INSERT INTO messages (chat_id, sender_type, sender_id, message, created_at) 
-         VALUES (?, ?, ?, ?, NOW())`,
-        [chatId, senderType, userId, message]
-      );
+      const newMsg = new Message({
+        chat_id: chat._id,
+        sender_type: senderType,
+        sender_id: userId,
+        message
+      });
+      await newMsg.save();
 
-      const [newMessage] = await db.query(
-        `SELECT m.*, u.name AS sender_name 
-         FROM messages m
-         LEFT JOIN users u ON u.id = m.sender_id 
-         WHERE m.id = ?`,
-        [insertMsg.insertId]
-      );
+      const populatedMsg = await Message.findById(newMsg._id)
+        .populate('sender_id', 'name')
+        .lean();
 
       io.to(chatRoom).emit('receive_message', {
-        id: newMessage[0].id,
-        message: newMessage[0].message,
+        id: populatedMsg._id,
+        message: populatedMsg.message,
         senderId: userId,
         senderType: senderType,
-        senderName: newMessage[0].sender_name || senderName || (senderType === 'admin' ? 'Admin' : 'User'),
-        timestamp: newMessage[0].created_at,
+        senderName: populatedMsg.sender_name || senderName || (senderType === 'admin' ? 'Admin' : 'User'),
+        timestamp: populatedMsg.created_at,
         isRead: false
       });
 
@@ -245,9 +241,9 @@ io.on('connection', (socket) => {
   socket.on('mark_messages_read', async (data) => {
     try {
       const { chatId, userId } = data;
-      await db.query(
-        'UPDATE messages SET is_read = 1 WHERE chat_id = ? AND sender_id != ? AND is_read = 0',
-        [chatId, userId]
+      await Message.updateMany(
+        { chat_id: chatId, sender_id: { $ne: userId }, is_read: false },
+        { is_read: true }
       );
     } catch (error) {
       console.error('Error marking messages as read:', error);
@@ -300,11 +296,16 @@ process.on('unhandledRejection', (reason, promise) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 CORS enabled for:`, uniqueOrigins);
-  console.log(`📡 WebSocket server is ready`);
+db.getConnection().then(() => {
+  server.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}`);
+    console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 CORS enabled for:`, uniqueOrigins);
+    console.log(`📡 WebSocket server is ready`);
+  });
+}).catch(err => {
+  console.error('Failed to connect to database. Server not started.', err);
+  process.exit(1);
 });
 
 module.exports = { app, server, io };

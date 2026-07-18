@@ -1,4 +1,11 @@
-const db = require('../config/db');
+const Booking = require('../models/Booking');
+const Service = require('../models/Service');
+const User = require('../models/User');
+const Review = require('../models/Review');
+const Complaint = require('../models/Complaint');
+const Chat = require('../models/Chat');
+const Message = require('../models/Message');
+const Payment = require('../models/Payment');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
 const path = require('path');
 const fs = require('fs');
@@ -37,20 +44,20 @@ const createBooking = async (req, res) => {
 
     let resolvedServiceId = service_id;
     if (!resolvedServiceId && category) {
-      const [services] = await db.query(
-        'SELECT id FROM services WHERE (category = ? OR name = ?) AND is_active = TRUE ORDER BY id LIMIT 1',
-        [category, category]
-      );
-      if (!services.length) {
+      const service = await Service.findOne({
+        $or: [{ category }, { name: category }],
+        is_active: true
+      }).sort({ _id: 1 });
+      
+      if (!service) {
         return res.status(404).json({ success: false, message: 'Selected service was not found' });
       }
-      resolvedServiceId = services[0].id;
+      resolvedServiceId = service._id;
     }
 
     const token = Math.random().toString(36).slice(2, 8).toUpperCase();
     const plannedAt = scheduled_at || buildScheduledAt(date, time);
 
-    // Process optional image uploads
     let imageUrls = [];
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
@@ -69,43 +76,43 @@ const createBooking = async (req, res) => {
       }
     }
 
-    const [result] = await db.query(
-      `INSERT INTO bookings
-        (user_id, service_id, description, issue_images, budget, urgency_level, service_token, address, lat, lng,
-         scheduled_at, contact_phone, payment_method, payment_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        req.user.id,
-        resolvedServiceId,
-        description,
-        JSON.stringify(imageUrls),
-        budget || null,
-        urgency_level || urgency || 'medium',
-        token,
-        address,
-        lat || null,
-        lng || null,
-        plannedAt,
-        contact_phone || null,
-        payment_method || 'cod',
-        payment_status || 'pending'
-      ]
-    );
+    const newBooking = new Booking({
+      user_id: req.user.id,
+      service_id: resolvedServiceId,
+      description,
+      issue_images: imageUrls,
+      budget: budget || null,
+      urgency_level: urgency_level || urgency || 'medium',
+      service_token: token,
+      address,
+      lat: lat || null,
+      lng: lng || null,
+      scheduled_at: plannedAt ? new Date(plannedAt) : null,
+      contact_phone: contact_phone || null,
+      payment_method: payment_method || 'cod',
+      payment_status: payment_status || 'pending',
+      status: 'pending',
+      status_history: [{
+        status: 'pending',
+        updated_by_user_id: req.user.id,
+        notes: 'Booking created'
+      }]
+    });
 
-    await db.query(
-      'INSERT INTO booking_status (booking_id, status, updated_by_user_id, notes) VALUES (?, ?, ?, ?)',
-      [result.insertId, 'pending', req.user.id, 'Booking created']
-    );
+    await newBooking.save();
 
-    const [rows] = await db.query(
-      `SELECT b.*, s.name AS service_name, s.category
-       FROM bookings b
-       LEFT JOIN services s ON s.id = b.service_id
-       WHERE b.id = ?`,
-      [result.insertId]
-    );
+    const populatedBooking = await Booking.findById(newBooking._id)
+      .populate('service_id', 'name category')
+      .lean();
 
-    res.status(201).json({ success: true, data: rows[0] });
+    const data = {
+      ...populatedBooking,
+      id: populatedBooking._id,
+      service_name: populatedBooking.service_id ? populatedBooking.service_id.name : null,
+      category: populatedBooking.service_id ? populatedBooking.service_id.category : null
+    };
+
+    res.status(201).json({ success: true, data });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });
@@ -115,21 +122,26 @@ const createBooking = async (req, res) => {
 const getMyBookings = async (req, res) => {
   try {
     const isAdmin = req.user.role === 'admin';
-    const whereClause = isAdmin ? '1 = 1' : 'b.user_id = ?';
-    const params = isAdmin ? [] : [req.user.id];
+    const query = isAdmin ? {} : { user_id: req.user.id };
 
-    const [bookings] = await db.query(
-      `SELECT b.*, s.name AS service_name, s.category, u.name AS user_name, u.phone AS user_phone, u.address AS user_address,
-              b.assigned_worker AS worker_name
-       FROM bookings b
-       LEFT JOIN services s ON s.id = b.service_id
-       LEFT JOIN users u ON u.id = b.user_id
-       WHERE ${whereClause}
-       ORDER BY b.created_at DESC`,
-      params
-    );
+    const bookings = await Booking.find(query)
+      .populate('service_id', 'name category')
+      .populate('user_id', 'name phone address')
+      .sort({ created_at: -1 })
+      .lean();
 
-    res.json({ success: true, count: bookings.length, data: bookings });
+    const mappedBookings = bookings.map(b => ({
+      ...b,
+      id: b._id,
+      service_name: b.service_id ? b.service_id.name : null,
+      category: b.service_id ? b.service_id.category : null,
+      user_name: b.user_id ? b.user_id.name : null,
+      user_phone: b.user_id ? b.user_id.phone : null,
+      user_address: b.user_id ? b.user_id.address : null,
+      worker_name: b.assigned_worker
+    }));
+
+    res.json({ success: true, count: mappedBookings.length, data: mappedBookings });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });
@@ -145,67 +157,57 @@ const updateBookingStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid booking status' });
     }
 
-    const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
-    if (!rows.length) {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = rows[0];
-    const updates = [];
-    const values = [];
+    let hasUpdates = false;
 
     if (status) {
-      updates.push('status = ?');
-      values.push(status);
+      booking.status = status;
       if (status === 'completed') {
-        updates.push('completed_at = NOW()');
+        booking.completed_at = new Date();
       }
+      hasUpdates = true;
     }
 
     if (assigned_worker !== undefined) {
-      updates.push('assigned_worker = ?');
-      values.push(assigned_worker);
+      booking.assigned_worker = assigned_worker;
+      hasUpdates = true;
     }
 
     if (assigned_worker_phone !== undefined) {
-      updates.push('assigned_worker_phone = ?');
-      values.push(assigned_worker_phone);
+      booking.assigned_worker_phone = assigned_worker_phone;
+      hasUpdates = true;
     }
 
     if (assigned_worker_email !== undefined) {
-      updates.push('assigned_worker_email = ?');
-      values.push(assigned_worker_email);
+      booking.assigned_worker_email = assigned_worker_email;
+      hasUpdates = true;
     }
 
     if (payment_status !== undefined) {
-      updates.push('payment_status = ?');
-      values.push(payment_status);
+      booking.payment_status = payment_status;
+      hasUpdates = true;
     }
 
-    if (updates.length === 0) {
+    if (!hasUpdates && !notes) {
       return res.status(400).json({ success: false, message: 'Nothing to update' });
     }
 
-    // Role checks
     if (req.user.role === 'user' && booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'You can update only your own bookings' });
     }
 
-    values.push(req.params.id);
-    await db.query(`UPDATE bookings SET ${updates.join(', ')} WHERE id = ?`, values);
-
-    // Add status history update
-    await db.query(
-      `INSERT INTO booking_status
-        (booking_id, status, updated_by_user_id, notes)
-       VALUES (?, ?, ?, ?)`,
-      [
-        req.params.id,
-        status || booking.status,
-        req.user.role === 'user' ? req.user.id : null,
-        notes || (assigned_worker ? `Worker assigned: ${assigned_worker}` : `Booking updated`)
-      ]
-    );
+    if (hasUpdates || notes) {
+      booking.status_history.push({
+        status: status || booking.status,
+        updated_by_user_id: req.user.role === 'user' ? req.user.id : null,
+        notes: notes || (assigned_worker ? `Worker assigned: ${assigned_worker}` : `Booking updated`)
+      });
+      await booking.save();
+    }
 
     res.json({ success: true, message: 'Booking updated successfully' });
   } catch (error) {
@@ -223,17 +225,15 @@ const createReview = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Rating (1-5 stars) is required' });
     }
 
-    const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-    if (!rows.length) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = rows[0];
     if (booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'You cannot review a booking that does not belong to you' });
     }
 
-    // GATING: Only completed or cancelled/rejected tasks can be reviewed
     if (booking.status !== 'completed' && booking.status !== 'cancelled') {
       return res.status(400).json({ 
         success: false, 
@@ -241,10 +241,13 @@ const createReview = async (req, res) => {
       });
     }
 
-    await db.query(
-      'INSERT INTO reviews (booking_id, user_id, rating, comment) VALUES (?, ?, ?, ?)',
-      [bookingId, req.user.id, rating, comment || null]
-    );
+    const review = new Review({
+      booking_id: bookingId,
+      user_id: req.user.id,
+      rating,
+      comment: comment || null
+    });
+    await review.save();
 
     res.status(201).json({ success: true, message: 'Review posted successfully' });
   } catch (error) {
@@ -262,17 +265,15 @@ const createComplaint = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Description is required for complaints' });
     }
 
-    const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-    if (!rows.length) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = rows[0];
     if (booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'You cannot complain about a booking that does not belong to you' });
     }
 
-    // GATING: Only completed or cancelled/rejected tasks can have complaints filed
     if (booking.status !== 'completed' && booking.status !== 'cancelled') {
       return res.status(400).json({ 
         success: false, 
@@ -280,10 +281,14 @@ const createComplaint = async (req, res) => {
       });
     }
 
-    await db.query(
-      "INSERT INTO complaints (booking_id, raised_by_type, raised_by_id, description, status) VALUES (?, 'user', ?, ?, 'open')",
-      [bookingId, req.user.id, description]
-    );
+    const complaint = new Complaint({
+      booking_id: bookingId,
+      raised_by_type: 'user',
+      raised_by_id: req.user.id,
+      description,
+      status: 'open'
+    });
+    await complaint.save();
 
     res.status(201).json({ success: true, message: 'Complaint registered successfully' });
   } catch (error) {
@@ -294,17 +299,29 @@ const createComplaint = async (req, res) => {
 
 const getAllComplaints = async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT c.*, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
-              b.service_token, s.name AS service_name
-       FROM complaints c
-       LEFT JOIN bookings b ON b.id = c.booking_id
-       LEFT JOIN users u ON u.id = b.user_id
-       LEFT JOIN services s ON s.id = b.service_id
-       ORDER BY c.created_at DESC`
-    );
+    const complaints = await Complaint.find()
+      .populate({
+        path: 'booking_id',
+        select: 'service_token service_id user_id',
+        populate: [
+          { path: 'user_id', select: 'name email phone' },
+          { path: 'service_id', select: 'name' }
+        ]
+      })
+      .sort({ created_at: -1 })
+      .lean();
 
-    res.json({ success: true, count: rows.length, data: rows });
+    const mapped = complaints.map(c => ({
+      ...c,
+      id: c._id,
+      user_name: c.booking_id && c.booking_id.user_id ? c.booking_id.user_id.name : null,
+      user_email: c.booking_id && c.booking_id.user_id ? c.booking_id.user_id.email : null,
+      user_phone: c.booking_id && c.booking_id.user_id ? c.booking_id.user_id.phone : null,
+      service_token: c.booking_id ? c.booking_id.service_token : null,
+      service_name: c.booking_id && c.booking_id.service_id ? c.booking_id.service_id.name : null
+    }));
+
+    res.json({ success: true, count: mapped.length, data: mapped });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });
@@ -313,83 +330,64 @@ const getAllComplaints = async (req, res) => {
 
 const getAllReviews = async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT r.*, u.name AS user_name, s.name AS service_name, b.service_token
-       FROM reviews r
-       LEFT JOIN bookings b ON b.id = r.booking_id
-       LEFT JOIN users u ON u.id = r.user_id
-       LEFT JOIN services s ON s.id = b.service_id
-       ORDER BY r.created_at DESC`
-    );
+    const reviews = await Review.find()
+      .populate('user_id', 'name')
+      .populate({
+        path: 'booking_id',
+        select: 'service_token service_id',
+        populate: { path: 'service_id', select: 'name' }
+      })
+      .sort({ created_at: -1 })
+      .lean();
 
-    res.json({ success: true, count: rows.length, data: rows });
+    const mapped = reviews.map(r => ({
+      ...r,
+      id: r._id,
+      user_name: r.user_id ? r.user_id.name : null,
+      service_name: r.booking_id && r.booking_id.service_id ? r.booking_id.service_id.name : null,
+      service_token: r.booking_id ? r.booking_id.service_token : null
+    }));
+
+    res.json({ success: true, count: mapped.length, data: mapped });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
 
-// --- CHAT SYSTEM ENDPOINTS (WORKING WITH YOUR SCHEMA) ---
-
 const getBookingMessages = async (req, res) => {
   try {
     const bookingId = req.params.id;
 
-    // Check if booking exists
-    const [bookings] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-    if (!bookings.length) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = bookings[0];
-    
-    // Check if user has permission
     if (req.user.role !== 'admin' && booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Unauthorized access to chat' });
     }
 
-    // Find chat
-    const [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
-    
-    if (!chats.length) {
-      // No chat exists yet, return empty messages
+    const chat = await Chat.findOne({ booking_id: bookingId });
+    if (!chat) {
       return res.json({ success: true, messages: [] });
     }
 
-    const chatId = chats[0].id;
+    const messages = await Message.find({ chat_id: chat._id })
+      .populate('sender_id', 'name')
+      .sort({ created_at: 1 })
+      .lean();
 
-    // Fetch messages - matching your schema exactly
-    const [messages] = await db.query(
-      `SELECT 
-        m.id,
-        m.chat_id,
-        m.sender_type,
-        m.sender_id,
-        m.message,
-        m.is_read,
-        m.created_at,
-        COALESCE(u.name, 
-          CASE 
-            WHEN m.sender_type = 'admin' THEN 'Support Admin'
-            ELSE 'Customer'
-          END
-        ) AS sender_name
-       FROM messages m
-       LEFT JOIN users u ON u.id = m.sender_id
-       WHERE m.chat_id = ?
-       ORDER BY m.created_at ASC`,
-      [chatId]
-    );
+    const mapped = messages.map(m => ({
+      ...m,
+      id: m._id,
+      sender_name: m.sender_type === 'admin' ? 'Support Admin' : (m.sender_id ? m.sender_id.name : 'Customer')
+    }));
 
-    res.json({ success: true, messages: messages || [] });
-    
+    res.json({ success: true, messages: mapped });
   } catch (error) {
     console.error('Error in getBookingMessages:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server Error',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Server Error', error: error.message });
   }
 };
 
@@ -402,142 +400,92 @@ const sendBookingMessage = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Message content is required' });
     }
 
-    // Check if booking exists
-    const [bookings] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-    if (!bookings.length) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = bookings[0];
-    
-    // Check if user has permission
     if (req.user.role !== 'admin' && booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Unauthorized to post messages' });
     }
 
-    // Retrieve or create chat entry
-    let [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
-    let chatId;
-
-    if (!chats.length) {
-      const [insertChat] = await db.query(
-        'INSERT INTO chats (user_id, booking_id) VALUES (?, ?)', 
-        [booking.user_id, bookingId]
-      );
-      chatId = insertChat.insertId;
-    } else {
-      chatId = chats[0].id;
+    let chat = await Chat.findOne({ booking_id: bookingId });
+    if (!chat) {
+      chat = new Chat({ user_id: booking.user_id, booking_id: bookingId });
+      await chat.save();
     }
 
     const senderType = req.user.role === 'admin' ? 'admin' : 'user';
 
-    // Insert message record
-    const [insertMsg] = await db.query(
-      `INSERT INTO messages (chat_id, sender_type, sender_id, message)
-       VALUES (?, ?, ?, ?)`,
-      [chatId, senderType, req.user.id, message]
-    );
+    const newMsg = new Message({
+      chat_id: chat._id,
+      sender_type: senderType,
+      sender_id: req.user.id,
+      message
+    });
+    await newMsg.save();
 
-    // Fetch the newly created message
-    const [newMessage] = await db.query(
-      `SELECT 
-        m.id,
-        m.chat_id,
-        m.sender_type,
-        m.sender_id,
-        m.message,
-        m.is_read,
-        m.created_at,
-        COALESCE(u.name, 
-          CASE 
-            WHEN m.sender_type = 'admin' THEN 'Support Admin'
-            ELSE 'Customer'
-          END
-        ) AS sender_name
-       FROM messages m
-       LEFT JOIN users u ON u.id = m.sender_id
-       WHERE m.id = ?`,
-      [insertMsg.insertId]
-    );
+    const populatedMsg = await Message.findById(newMsg._id)
+      .populate('sender_id', 'name')
+      .lean();
 
-    res.status(201).json({ success: true, message: newMessage[0] });
-    
+    const resultMsg = {
+      ...populatedMsg,
+      id: populatedMsg._id,
+      sender_name: senderType === 'admin' ? 'Support Admin' : (populatedMsg.sender_id ? populatedMsg.sender_id.name : 'Customer')
+    };
+
+    res.status(201).json({ success: true, message: resultMsg });
   } catch (error) {
     console.error('Error in sendBookingMessage:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server Error',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Server Error', error: error.message });
   }
 };
-
-// --- BOOKING CANCELLATION ---
 
 const cancelBooking = async (req, res) => {
   try {
     const bookingId = req.params.id;
     const { cancellationReason } = req.body;
 
-    // Fetch booking details
-    const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-    if (!rows.length) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const booking = rows[0];
-
-    // Authorization: User can only cancel their own bookings, admin can cancel any
     if (req.user.role === 'user' && booking.user_id !== req.user.id) {
       return res.status(403).json({ success: false, message: 'You can only cancel your own bookings' });
     }
 
-    // Validate cancellation: Cannot cancel already completed or cancelled bookings
-    const cancelledStatuses = ['completed', 'cancelled'];
-    if (cancelledStatuses.includes(booking.status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Cannot cancel a booking that is already ${booking.status}` 
-      });
+    if (['completed', 'cancelled'].includes(booking.status)) {
+      return res.status(400).json({ success: false, message: `Cannot cancel a booking that is already ${booking.status}` });
     }
 
-    // Update booking status to cancelled
-    await db.query(
-      'UPDATE bookings SET status = ?, updated_at = NOW() WHERE id = ?',
-      ['cancelled', bookingId]
-    );
-
-    // Record status change in history
+    booking.status = 'cancelled';
     const notes = cancellationReason || (req.user.role === 'user' ? 'Cancelled by customer' : 'Cancelled by admin');
-    await db.query(
-      `INSERT INTO booking_status (booking_id, status, updated_by_user_id, notes)
-       VALUES (?, ?, ?, ?)`,
-      [bookingId, 'cancelled', req.user.id, notes]
-    );
+    booking.status_history.push({
+      status: 'cancelled',
+      updated_by_user_id: req.user.id,
+      notes
+    });
+    
+    await booking.save();
 
-    // If payment was not completed, mark as failed
     if (booking.payment_status === 'pending') {
-      await db.query(
-        'UPDATE payments SET status = ? WHERE booking_id = ? AND status = ?',
-        ['failed', bookingId, 'pending']
-      );
+      await Payment.updateMany({ booking_id: bookingId, status: 'pending' }, { status: 'failed' });
     }
 
-    // Get updated booking details
-    const [updatedBooking] = await db.query(
-      `SELECT b.*, s.name AS service_name, s.category
-       FROM bookings b
-       LEFT JOIN services s ON s.id = b.service_id
-       WHERE b.id = ?`,
-      [bookingId]
-    );
+    const updatedBooking = await Booking.findById(bookingId)
+      .populate('service_id', 'name category')
+      .lean();
+      
+    const data = {
+      ...updatedBooking,
+      id: updatedBooking._id,
+      service_name: updatedBooking.service_id ? updatedBooking.service_id.name : null,
+      category: updatedBooking.service_id ? updatedBooking.service_id.category : null
+    };
 
-    res.json({ 
-      success: true, 
-      message: 'Booking cancelled successfully',
-      data: updatedBooking[0]
-    });
-
+    res.json({ success: true, message: 'Booking cancelled successfully', data });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: 'Server Error' });

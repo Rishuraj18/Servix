@@ -1,73 +1,39 @@
-const fs = require('fs');
-const path = require('path');
-const mysql = require('mysql2/promise');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
-let pool;
 let initPromise;
 
-const baseConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  port: process.env.DB_PORT || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  multipleStatements: true
-};
-
 const initializeDatabase = async () => {
-  if (pool) return pool;
-
-  const dbName = process.env.DB_NAME || 'servix_db';
-  const setupConnection = await mysql.createConnection(baseConfig);
-
-  await setupConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
-
-  if (process.env.DB_AUTO_SYNC !== 'false') {
-    const schemaPath = path.join(__dirname, '..', 'schema.sql');
-    const schema = fs.readFileSync(schemaPath, 'utf8');
-    await setupConnection.query(schema);
+  if (mongoose.connection.readyState >= 1) {
+    return mongoose.connection;
   }
 
-  await setupConnection.end();
+  // Fallback if not specified in env
+  const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/servix_db';
 
-  pool = mysql.createPool({
-    ...baseConfig,
-    database: dbName
-  });
-
-  const connection = await pool.getConnection();
-  connection.release();
-  console.log('Database connected successfully');
-
-  return pool;
+  try {
+    await mongoose.connect(mongoUri);
+    console.log('MongoDB connected successfully');
+    return mongoose.connection;
+  } catch (error) {
+    console.error('Error connecting to MongoDB:', error.message);
+    throw error;
+  }
 };
 
 const getPool = () => {
   if (!initPromise) {
     initPromise = initializeDatabase().catch((error) => {
       initPromise = null;
-      console.error('Error connecting to the database:', error.message);
       throw error;
     });
   }
-
   return initPromise;
 };
 
+// We export getConnection so that server.js can await database connection before starting
 module.exports = {
-  query: async (...args) => {
-    const db = await getPool();
-    return db.query(...args);
-  },
-  execute: async (...args) => {
-    const db = await getPool();
-    return db.execute(...args);
-  },
   getConnection: async () => {
-    const db = await getPool();
-    return db.getConnection();
+    return await getPool();
   }
 };

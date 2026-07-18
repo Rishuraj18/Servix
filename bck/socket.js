@@ -1,6 +1,8 @@
 // socket.js
 const { Server } = require('socket.io');
-const db = require('./config/db');
+const Booking = require('./models/Booking');
+const Chat = require('./models/Chat');
+const Message = require('./models/Message');
 
 let io;
 
@@ -32,60 +34,44 @@ const initializeSocket = (server) => {
         const chatRoom = `booking_${bookingId}`;
         
         // Check booking exists
-        const [bookings] = await db.query('SELECT id FROM bookings WHERE id = ?', [bookingId]);
-        if (!bookings.length) {
+        const booking = await Booking.findById(bookingId);
+        if (!booking) {
           socket.emit('message_error', { message: 'Booking not found' });
           return;
         }
 
         // Get or create chat
-        let [chats] = await db.query('SELECT id FROM chats WHERE booking_id = ? LIMIT 1', [bookingId]);
-        let chatId;
-
-        if (!chats.length) {
-          const [insertChat] = await db.query('INSERT INTO chats (user_id, booking_id) VALUES (?, ?)', [data.userId, bookingId]);
-          chatId = insertChat.insertId;
-        } else {
-          chatId = chats[0].id;
+        let chat = await Chat.findOne({ booking_id: bookingId });
+        if (!chat) {
+          chat = new Chat({ user_id: data.userId, booking_id: bookingId });
+          await chat.save();
         }
 
         // Save message to database
         const senderType = data.userRole === 'admin' ? 'admin' : 'user';
-        const [insertMsg] = await db.query(
-          `INSERT INTO messages (chat_id, sender_type, sender_id, message) VALUES (?, ?, ?, ?)`,
-          [chatId, senderType, data.userId, data.message]
-        );
+        const newMsg = new Message({
+          chat_id: chat._id,
+          sender_type: senderType,
+          sender_id: data.userId,
+          message: data.message
+        });
+        await newMsg.save();
 
-        const [newMessage] = await db.query(
-          `SELECT 
-            m.id,
-            m.chat_id,
-            m.sender_type,
-            m.sender_id,
-            m.message,
-            m.is_read,
-            m.created_at,
-            COALESCE(u.name, 
-              CASE 
-                WHEN m.sender_type = 'admin' THEN 'Support Admin'
-                ELSE 'Customer'
-              END
-            ) AS sender_name
-           FROM messages m
-           LEFT JOIN users u ON u.id = m.sender_id
-           WHERE m.id = ?`,
-          [insertMsg.insertId]
-        );
+        const populatedMsg = await Message.findById(newMsg._id)
+          .populate('sender_id', 'name')
+          .lean();
+
+        const senderName = senderType === 'admin' ? 'Support Admin' : (populatedMsg.sender_id ? populatedMsg.sender_id.name : 'Customer');
 
         // Broadcast to all users in this chat room
         io.to(chatRoom).emit('receive_message', {
-          id: newMessage[0].id,
-          message: newMessage[0].message,
+          id: populatedMsg._id,
+          message: populatedMsg.message,
           senderId: data.userId,
           senderType: senderType,
-          senderName: newMessage[0].sender_name,
-          timestamp: newMessage[0].created_at,
-          isRead: newMessage[0].is_read
+          senderName: senderName,
+          timestamp: populatedMsg.created_at,
+          isRead: populatedMsg.is_read
         });
 
       } catch (error) {

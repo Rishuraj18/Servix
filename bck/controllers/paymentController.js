@@ -1,6 +1,6 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const db = require('../config/db');
+const Payment = require('../models/Payment');
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -31,10 +31,15 @@ const createOrder = async (req, res) => {
     }
 
     // Save initial payment record as pending
-    await db.query(
-      'INSERT INTO payments (booking_id, user_id, amount, razorpay_order_id, status) VALUES (?, ?, ?, ?, ?)',
-      [booking_id, req.user.id, amount, order.id, 'pending']
-    );
+    const newPayment = new Payment({
+      booking_id,
+      user_id: req.user.id,
+      amount,
+      razorpay_order_id: order.id,
+      status: 'pending'
+    });
+    
+    await newPayment.save();
 
     res.json({ success: true, order });
   } catch (error) {
@@ -58,9 +63,13 @@ const verifyPayment = async (req, res) => {
 
     if (razorpay_signature === expectedSign) {
       // Payment is successful, update database
-      await db.query(
-        'UPDATE payments SET razorpay_payment_id = ?, razorpay_signature = ?, status = ? WHERE razorpay_order_id = ?',
-        [razorpay_payment_id, razorpay_signature, 'completed', razorpay_order_id]
+      await Payment.findOneAndUpdate(
+        { razorpay_order_id },
+        { 
+          razorpay_payment_id, 
+          razorpay_signature, 
+          status: 'completed' 
+        }
       );
 
       return res.json({ success: true, message: 'Payment verified successfully' });
