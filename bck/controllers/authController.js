@@ -44,46 +44,6 @@ const registerUser = async (req, res) => {
   }
 };
 
-// @desc    Register a new admin
-// @route   POST /api/auth/register/admin
-// @access  Public
-const registerAdmin = async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide all required fields' });
-    }
-
-    const existingAdmins = await Admin.find({ email });
-    if (existingAdmins.length > 0) {
-      return res.status(400).json({ success: false, message: 'Admin account with this email already exists' });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    const newAdmin = new Admin({
-      name,
-      email,
-      password: hashedPassword,
-      role: 'superadmin'
-    });
-    
-    await newAdmin.save();
-
-    const token = generateToken(newAdmin._id, 'admin');
-
-    res.status(201).json({
-      success: true,
-      token,
-      user: { id: newAdmin._id, name, email, role: 'admin', adminRole: 'superadmin' }
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: 'Server Error' });
-  }
-};
 
 // @desc    Login a user or admin dynamically (Unified Role-Based Login)
 // @route   POST /api/auth/login
@@ -194,7 +154,6 @@ const getMe = async (req, res) => {
 
 module.exports = {
   registerUser,
-  registerAdmin,
   loginUser,
   loginAdmin,
   loginUnified,

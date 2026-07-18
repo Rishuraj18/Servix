@@ -11,7 +11,6 @@ const {
 const { protect } = require('../middlewares/auth');
 
 router.post('/register/user', registerUser);
-router.post('/register/admin', registerAdmin);
 
 router.post('/login', loginUnified);
 router.post('/login/user', loginUnified); // Route backward compatibility
