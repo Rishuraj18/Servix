@@ -74,6 +74,9 @@ import Services from "./pages/Services";
 import PostTask from "./pages/PostTask";
 import UserDashboard from "./pages/UserDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import Contact from "./pages/Contact";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
@@ -125,6 +128,9 @@ function AppContent() {
           <Route path="/register" element={<Register />} />
           <Route path="/services" element={<Services />} />
           <Route path="/post-task" element={<PostTask />} />
+          <Route path="/contact" element={<Contact />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/terms" element={<Terms />} />
 
           {/* USER DASHBOARD */}
           <Route path="/dashboard/user" element={<UserDashboard />} />

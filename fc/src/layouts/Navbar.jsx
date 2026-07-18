@@ -4,6 +4,7 @@ import { logout } from '../features/authSlice';
 import { Menu, X, User as UserIcon } from 'lucide-react';
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import servixLogo from '../assets/servix.png';
 
 const Navbar = () => {
   const { isAuthenticated, user } = useSelector((state) => state.auth);
@@ -19,8 +20,9 @@ const Navbar = () => {
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16 items-center">
           <div className="flex items-center">
-            <Link to="/" className="text-2xl font-extrabold text-gradient">
-              Servix
+            <Link to="/" className="text-2xl font-extrabold text-gradient flex items-center gap-1">
+              <img src={servixLogo} alt="Servix Logo" className="w-12 h-12 object-contain" />
+              <span>Servix</span>
             </Link>
           </div>
 
